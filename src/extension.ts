@@ -31,9 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // granted, so the first visit is where consent has to happen.
       if (!poller.snapshot().signedIn) await poller.signIn();
     }),
-    vscode.commands.registerCommand('ghActionsWatch.refresh', () =>
-      poller.refresh({ force: true }),
-    ),
+    vscode.commands.registerCommand('ghActionsWatch.refresh', () => view.refreshNow()),
     vscode.commands.registerCommand('ghActionsWatch.signIn', () => poller.signIn()),
     // A commit or a push is the local echo of "a run may now exist". Refresh
     // immediately instead of waiting for the next tick; the `ETag` makes the

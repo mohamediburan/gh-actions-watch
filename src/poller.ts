@@ -2,7 +2,14 @@ import * as vscode from 'vscode';
 import { GitHubSession } from './auth';
 import { ActionsClient, GitHubApiError } from './github';
 import { resolveWorkspaceRepos } from './repository';
-import type { Job, RepoState, ViewState, WorkflowRun, WorkflowRunStatus } from './types';
+import type {
+  Job,
+  RepoState,
+  ViewState,
+  WorkflowInfo,
+  WorkflowRun,
+  WorkflowRunStatus,
+} from './types';
 
 export interface PollerOptions {
   /** Explicit `owner/name` list. Empty means "the GitHub remote of each open folder". */
@@ -76,6 +83,7 @@ export class ActionsPoller implements vscode.Disposable {
     return {
       signedIn: this.signedIn,
       authPending: this.authPending,
+      recentRuns: this.options.recentRuns,
       repos,
       rateLimit: repos.map((repo) => repo.rateLimit).find((limit) => limit !== null) ?? null,
       polledAt: Date.now(),
@@ -170,7 +178,11 @@ export class ActionsPoller implements vscode.Disposable {
    * Jobs and steps for one run. Called only when the user drills into a run, so
    * it is deliberately outside the poll loop.
    */
-  async loadJobs(repo: string, run: WorkflowRun): Promise<Job[] | null> {
+  async loadJobs(
+    repo: string,
+    run: WorkflowRun,
+    options: { fresh?: boolean } = {},
+  ): Promise<Job[] | null> {
     const token = await this.session.silentToken();
     this.authPending = false;
     if (token === null) {
@@ -180,7 +192,14 @@ export class ActionsPoller implements vscode.Disposable {
     }
 
     try {
-      return await this.client.listJobs(repo, run.id, { token, perPage: JOBS_PER_PAGE });
+      return await this.client.listJobs(repo, run.id, {
+        token,
+        perPage: JOBS_PER_PAGE,
+        // Steps of a running run move; a finished run never changes again.
+        live: run.status !== 'completed',
+        // An explicit refresh must re-read even a finished run.
+        fresh: options.fresh === true,
+      });
     } catch (error) {
       const message =
         error instanceof GitHubApiError ? error.message : 'Could not read the jobs for this run.';
@@ -205,9 +224,28 @@ export class ActionsPoller implements vscode.Disposable {
     try {
       return await this.client.jobLog(repo, jobId, { token });
     } catch (error) {
+      // A 404 is expected while a job is still running: GitHub publishes a log
+      // only once the job completes, and the card shows a note for it.
+      if (error instanceof GitHubApiError && error.kind === 'not-found') return null;
       const message =
         error instanceof GitHubApiError ? error.message : 'Could not read that step’s log.';
       void vscode.window.showErrorMessage(`GitHub Actions Watch: ${message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Workflow files of one repository, for naming workflows that have no run in
+   * the current page. On demand and cached 15 minutes; never part of the poll.
+   */
+  async loadWorkflows(repo: string, options: { fresh?: boolean } = {}): Promise<WorkflowInfo[] | null> {
+    const token = await this.session.silentToken();
+    if (token === null) return null;
+    try {
+      return await this.client.listWorkflows(repo, { token, fresh: options.fresh === true });
+    } catch {
+      // A missing or invisible workflow list must not break the card: the runs
+      // are still correct, they just cannot be labelled further.
       return null;
     }
   }

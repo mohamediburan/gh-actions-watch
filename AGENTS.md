@@ -22,14 +22,21 @@ Keep new work pointed at that goal.
 - **The surface is a sidebar webview view.** There is no status-bar item; the
   view is opened from the activity bar.
 - **One polled endpoint.** `/repos/{owner}/{repo}/actions/runs`, with
-  `If-None-Match`. Do not add a second polling loop.
+  `If-None-Match`. Do not add a second polling loop. `/actions/workflows` is a
+  different thing: it is read **on demand**, only while the By workflow section
+  is open, cached 15 minutes, so it never enters the timer. A failed read is
+  cached for the same window, so a card that cannot see workflows does not ask
+  on every poll.
 - **Jobs are on demand.** `/runs/{id}/jobs` is fetched only when a run is
-  opened, and cached 60 s in a cache capped at 8 runs (one page of jobs with
-  steps is ~0.4 MB). It must never enter the poll.
+  opened, and cached 60 s — or 10 s while the run is still going — in a cache
+  capped at 8 runs (one page of jobs with steps is ~0.4 MB). It must never
+  enter the poll.
 - **Logs are on demand, twice over.** A step's log is one blob fetched from
   `/actions/jobs/{id}/logs` only when that step is expanded: 256 KB cap, 5 min
   cache, 8 jobs, and the redirect is followed without the token. It never
-  enters the poll either.
+  enters the poll either. A step that has not finished is never requested —
+  GitHub answers 404 until the job completes — and an excerpt of a running run
+  is dropped after 10 s.
 
 ## Why the sidebar
 
@@ -95,11 +102,15 @@ Corollaries:
 ## Cost rules
 
 - `ETag` per repository, replayed as `If-None-Match`; **a 304 does not consume
-  rate-limit quota**, so an idle poll is effectively free.
+  rate-limit quota**, so an idle poll is effectively free. Jobs use the same
+  trick, so re-reading an unchanged run is free too.
 - 15 s cadence while any run is queued/in progress, 90 s otherwise.
 - No request while the window is unfocused unless `refresh({ force: true })`.
 - On 403/429 with `x-ratelimit-remaining: 0`, back off to `x-ratelimit-reset`,
   clamped to 30 s…15 min.
+- A **secondary** limit answers 403/429 with `retry-after` and quota still
+  remaining, so it is recognised by that header and paused the same way;
+  treating it as a plain HTTP error is what turns a block into a lockout.
 - A commit or push wakes the same loop (`src/git.ts`) instead of adding one: a
   fingerprint of HEAD and the remote-tracking refs that has not changed spends
   nothing, the resulting poll lands on a 304, and an unfocused window still
@@ -159,8 +170,8 @@ no repository secret:
 - the publisher has a Trusted Publishing policy for repository owner
   `mohamediburan`, repository `gh-actions-watch`, workflow `release.yml`, no
   environment;
-- push a tag that matches `package.json` `version` (`git tag v0.1.0 && git push
-  origin v0.1.0`) and `.github/workflows/release.yml` typechecks, tests and runs
+- push a tag that matches `package.json` `version` (`git tag v0.2.0 && git push
+  origin v0.2.0`) and `.github/workflows/release.yml` typechecks, tests and runs
   `vsce publish --oidc`;
 - the job needs `id-token: write`; each OIDC token can be exchanged once and the
   resulting credential expires after 15 minutes.

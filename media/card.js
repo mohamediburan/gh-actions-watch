@@ -74,12 +74,18 @@
     head.append(button('icon', '\u21BB', 'refresh', 'Refresh'));
     app.append(head);
 
+    // A 2px indeterminate bar: the cheapest "something is happening" there is.
+    if (view.busy) {
+      const bar = el('div', 'progress');
+      bar.append(el('i'));
+      app.append(bar);
+    }
+
     if (view.subtitle) app.append(el('div', 'sub', view.subtitle));
 
     // A network load (jobs, or a step log) can take a second or two: say so,
     // and make the rows unclickable so a second click cannot queue another.
     app.setAttribute('aria-busy', String(view.busy));
-    if (view.busy) app.append(el('p', 'note', 'Loading…'));
 
     if (view.error) app.append(el('p', 'error', view.error));
 
@@ -110,8 +116,17 @@
     }
 
     const list = el('div', view.busy ? 'list is-loading' : 'list');
-    for (const row of view.rows) list.append(renderRow(row));
+    for (const row of view.rows) {
+      list.append(renderRow(row));
+      // Skeleton lines under the row that is being fetched, so the wait is
+      // attached to what was clicked instead of floating at the bottom.
+      if (view.busyKey === row.id) {
+        for (let i = 0; i < 3; i += 1) list.append(el('div', 'skeleton'));
+      }
+    }
     app.append(list);
+
+    if (view.footer) app.append(el('p', 'foot', view.footer));
   }
 
   app.addEventListener('click', (event) => {

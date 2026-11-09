@@ -5,6 +5,7 @@ import type {
   Job,
   RepoState,
   ViewState,
+  WorkflowInfo,
   WorkflowRun,
   WorkflowRunConclusion,
   WorkflowRunStatus,
@@ -164,6 +165,17 @@ export function relative(iso: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+/**
+ * When the rows were last read. A refresh that finds nothing new is still a
+ * refresh, and this is the only evidence of it.
+ */
+export function updatedLabel(fetchedAt: number | null): string {
+  if (fetchedAt === null || fetchedAt <= 0) return '';
+  const seconds = Math.max(0, Math.round((Date.now() - fetchedAt) / 1000));
+  if (seconds < 45) return 'Updated just now';
+  return `Updated ${relative(new Date(fetchedAt).toISOString())} ago`;
+}
+
 export function duration(start: string | null, end: string | null): string {
   if (start === null || end === null) return '';
   const from = Date.parse(start);
@@ -239,8 +251,8 @@ export function stepLogLines(
 export interface DetailOptions {
   /** Jobs whose steps are showing. */
   openJobs: ReadonlySet<number>;
-  /** Expanded step logs, keyed by `stepKey`. */
-  logs: ReadonlyMap<string, string[]>;
+  /** Expanded step logs, keyed by `stepKey`, with the time they were read. */
+  logs: ReadonlyMap<string, { at: number; lines: string[] }>;
 }
 
 /**
@@ -296,8 +308,7 @@ export function detailRows(run: WorkflowRun, jobs: Job[], options: DetailOptions
 
     for (const step of job.steps) {
       const stepTook = duration(step.startedAt, step.completedAt);
-      const excerpt = options.logs.get(stepKey(job.id, step.number));
-      // GitHub anchors a step by number on the job page's log timeline.
+      const excerpt = options.logs.get(stepKey(job.id, step.number));      // GitHub anchors a step by number on the job page's log timeline.
       const anchor = job.url === '' ? run.url : `${job.url}#step:${step.number}:1`;
 
       rows.push({
@@ -325,7 +336,7 @@ export function detailRows(run: WorkflowRun, jobs: Job[], options: DetailOptions
         action: { kind: 'url', url: anchor },
       });
 
-      excerpt.forEach((line, index) => {
+      excerpt.lines.forEach((line, index) => {
         rows.push({
           id: `log:${job.id}:${step.number}:${index}`,
           kind: 'log',
@@ -360,6 +371,41 @@ export function sectionRow(
     depth: 0,
     expanded,
     action: { kind: 'toggle-section', section },
+  };
+}
+
+/**
+ * A workflow file that has no run inside the current page.
+ *
+ * It cannot be expanded — there is nothing to show — so it opens the workflow
+ * on github.com instead, and says why it is quiet.
+ */
+export function idleWorkflowRow(repo: string, workflow: WorkflowInfo, depth: number): CardRow {
+  const disabled = workflow.state !== 'active';
+  return {
+    id: `wf-idle:${repo}:${workflow.id}`,
+    kind: 'item',
+    title: workflow.name,
+    meta: disabled ? workflow.state.replace(/_/g, ' ') : 'no run in this page',
+    tip: disabled ? `${workflow.name} — ${workflow.state}` : `${workflow.name} — open on GitHub`,
+    tone: 'muted',
+    depth,
+    action: { kind: 'url', url: workflow.url },
+  };
+}
+
+/** A repository header, used only when more than one repository is watched. */
+export function repoRow(repo: string, expanded: boolean, count: number): CardRow {
+  return {
+    id: `repo:${repo}`,
+    kind: 'group',
+    title: repo,
+    meta: `${count}`,
+    tip: `${repo} — ${expanded ? 'hide' : 'show'} its workflows`,
+    tone: 'muted',
+    depth: 1,
+    expanded,
+    action: { kind: 'toggle-repo', repo },
   };
 }
 

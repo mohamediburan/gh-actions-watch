@@ -13,7 +13,7 @@ package:
 
 ```bash
 npm run package
-code --install-extension gh-actions-watch-0.1.0.vsix
+code --install-extension gh-actions-watch-0.2.0.vsix
 ```
 
 Then click the **Actions** icon in the Activity Bar. To keep it out of the way,
@@ -63,12 +63,35 @@ repository.
 The list screen has two collapsible sections. **All runs** is the newest run
 page (`ghActionsWatch.recentRuns`, default 25) from every watched repository,
 newest first. **By workflow** groups those same runs by workflow and opens each
-group's runs in place. All runs starts open, By workflow starts collapsed.
+group's runs in place. All runs starts open, By workflow starts collapsed. With
+more than one repository, each gets its own header inside **By workflow** — they
+are indistinguishable once merged.
+
+When a repository's page is full, one muted line under the list says so
+(`Updated just now · newest 25 runs per repo — raise
+ghActionsWatch.recentRuns for more`). That is why a workflow with no run in the
+page is absent from the runs: the page is shared by every workflow in the
+repository. It is still listed under **By workflow**, muted, as `no run in this
+page`, because `/actions/workflows` is read on demand (15-minute cache) to name
+the workflows that are quiet. That endpoint is only touched once you open the
+section, and it never joins the poll.
+
+`ghActionsWatch.recentRuns` accepts 1–100 (GitHub's per-page maximum).
 
 Opening a run lists **every** job and every step of that run, so a failure is
 seen in context: failed jobs are red and start expanded, the rest are one click
 away. Expanding a step shows that step's lines from the job log inline, with
 **Open full log on GitHub** one click away.
+
+A running run is treated as live: its steps are re-read on every poll (10 s
+cache instead of 60 s), and an expanded excerpt is dropped after 10 s so it
+never looks fresher than it is. GitHub publishes a job's log only once the job
+finishes, so expanding a step that has not finished says so instead of sending a
+request that would 404.
+
+Loading is shown where it happens: a 2 px indeterminate bar under the header,
+skeleton lines beneath the row you clicked, and the list dimmed and unclickable
+until the request lands.
 
 Clicking a row never reloads the card: the level you are on and the sections and
 groups you opened stay put, even when you switch to another sidebar view and
@@ -97,10 +120,20 @@ The card refreshes itself, so there is nothing to keep in sync by hand:
   in the open repository;
 - not at all while the window is in the background.
 
-Requests are conditional, so a refresh that finds nothing new spends no GitHub
-API quota. Jobs are fetched only for a run you open, and a step's log only when
-you expand that step.
+A refresh you ask for is visible and is not served from a cache: the bar under
+the header shows while it runs, the open run's jobs and step logs are re-read,
+and the footer tells you when the rows were last read (`Updated just now`), so a
+refresh that finds nothing new still says so.
 
+Requests are conditional, so a refresh that finds nothing new spends no GitHub
+API quota — that applies to the run page and to a run's jobs. Jobs are fetched
+only for a run you open, and a step's log only when you expand that step.
+Workflow definitions are read once per 15 minutes, and only while **By
+workflow** is open.
+
+When GitHub does limit the extension — the primary hourly quota or a secondary
+burst limit — the card pauses until the time GitHub gives (`x-ratelimit-reset`
+or `retry-after`) instead of retrying into the block.
 ## Repository scope
 
 The default is the current checkout: for each workspace folder, the extension
@@ -116,7 +149,7 @@ npm run bundle     # esbuild -> dist/extension.js (one file, zero runtime deps)
 npm run typecheck
 npm run lint
 npm test           # headless: vscode aliased to a stub, GitHub responses canned
-npm run package    # -> gh-actions-watch-0.1.0.vsix
+npm run package    # -> gh-actions-watch-0.2.0.vsix
 ```
 
 Open the folder in VS Code and press `F5` for an Extension Development Host.

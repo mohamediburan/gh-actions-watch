@@ -93,6 +93,58 @@ body {
   white-space: nowrap;
 }
 
+/* 2px indeterminate bar: transform only, so no layout or paint per frame. */
+.progress {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.progress i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: var(--run);
+  animation: sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+/* Skeleton lines: a placeholder, not a spinner in the middle of nowhere. */
+.skeleton {
+  height: 6px;
+  margin: 4px 6px 4px 18px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--hover), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.foot {
+  margin: 4px 8px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
 /* --- rows: 22px tall, name truncates, meta never wraps --- */
 
 .list {
@@ -227,6 +279,11 @@ body {
    (it is decoration, and a hidden view is discarded anyway). */
 @media (prefers-reduced-motion: reduce) {
   .dot[data-tone='running'] {
+    animation: none;
+  }
+
+  .progress i,
+  .skeleton {
     animation: none;
   }
 }

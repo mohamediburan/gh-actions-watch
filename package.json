@@ -2,7 +2,7 @@
   "name": "gh-actions-watch",
   "displayName": "GitHub Actions Watch",
   "description": "Compact GitHub Actions sidebar card: all runs, runs grouped by workflow, and the failed step on demand.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "publisher": "mohamediburan",
   "engines": {
@@ -97,8 +97,8 @@
           "type": "number",
           "default": 25,
           "minimum": 1,
-          "maximum": 50,
-          "description": "How many recent runs to fetch per repository. The page is shared by every workflow, so a higher number surfaces more workflow groups."
+          "maximum": 100,
+          "description": "How many recent runs to fetch per repository (GitHub allows up to 100). The page is shared by every workflow, so a higher number surfaces more workflow groups."
         }
       }
     }

@@ -57,6 +57,16 @@ export interface JobStep {
   completedAt: string | null;
 }
 
+/** A workflow file, from `/actions/workflows`. Not how runs are listed. */
+export interface WorkflowInfo {
+  id: number;
+  name: string;
+  /** `html_url` — the workflow's own page on github.com. */
+  url: string;
+  /** `active`, `disabled_manually`, … */
+  state: string;
+}
+
 export interface Job {
   id: number;
   name: string;
@@ -97,6 +107,8 @@ export interface ViewState {
   signedIn: boolean;
   /** False until the first silent token lookup has answered. */
   authPending: boolean;
+  /** Runs requested per repository; the list is capped by it. */
+  recentRuns: number;
   repos: RepoState[];
   rateLimit: RateLimitSnapshot | null;
   polledAt: number;
@@ -126,7 +138,9 @@ export type CardAction =
   /** Expand the steps of one job in the run view. */
   | { kind: 'toggle-job'; jobId: number }
   /** Expand the log excerpt for one step of a job. */
-  | { kind: 'toggle-step-log'; jobId: number; step: number };
+  | { kind: 'toggle-step-log'; jobId: number; step: number }
+  /** Collapse one repository's workflows when several repos are watched. */
+  | { kind: 'toggle-repo'; repo: string };
 
 /** `section`/`group` rows toggle, `item` is a leaf, `log` is plain text. */
 export type CardRowKind = 'section' | 'group' | 'item' | 'log';
@@ -161,6 +175,10 @@ export interface CardView {
   /** The silent session check has not answered yet: do not offer sign-in. */
   authPending: boolean;
   busy: boolean;
+  /** Row id whose content is being fetched, so it can show a placeholder. */
+  busyKey: string | null;
+  /** One muted line under the list, e.g. why the page is capped. */
+  footer: string;
   /** Navigation help when there is nothing to poll. */
   hint: string | null;
   /** Transport/repository failure, shown as one compact line. */

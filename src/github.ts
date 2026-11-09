@@ -3,6 +3,7 @@ import type {
   JobStep,
   RateLimitSnapshot,
   RepoErrorKind,
+  WorkflowInfo,
   WorkflowRun,
   WorkflowRunConclusion,
   WorkflowRunStatus,
@@ -13,6 +14,8 @@ const API_VERSION = '2022-11-28';
 const REQUEST_TIMEOUT_MS = 15_000;
 /** A failed run's jobs do not change, so a repeat drill-down costs nothing. */
 const JOBS_CACHE_MS = 60_000;
+/** A running job's steps do change, so they are re-read on almost every poll. */
+const JOBS_LIVE_CACHE_MS = 10_000;
 /** One page of jobs with steps is ~0.4 MB, so the cache must stay small. */
 const JOBS_CACHE_ENTRIES = 8;
 /** A job log is one text blob: the API has no per-step log endpoint. */
@@ -20,6 +23,11 @@ const LOG_CACHE_MS = 5 * 60_000;
 const LOG_CACHE_ENTRIES = 8;
 /** Enough for the failure at the end of a step, not a 20 MB matrix log. */
 const LOG_MAX_BYTES = 256 * 1024;
+/** Workflow definitions change rarely, so they are read once and kept long. */
+const WORKFLOWS_CACHE_MS = 15 * 60_000;
+const WORKFLOWS_CACHE_ENTRIES = 8;
+/** GitHub's maximum page size for both runs and workflows. */
+const MAX_PER_PAGE = 100;
 
 const RUN_STATUSES: readonly WorkflowRunStatus[] = [
   'completed',
@@ -70,7 +78,10 @@ export interface ListRunsResult {
 export interface ListJobsOptions {
   token: string;
   perPage: number;
-  signal?: AbortSignal;
+  /** True while the run is still going: use the short cache window. */
+  live?: boolean;
+  /** Skip a warm cache entry, for an explicit refresh. */
+  fresh?: boolean;
 }
 
 interface RequestSpec {
@@ -212,6 +223,31 @@ export function parseJobs(payload: unknown): Job[] {
   return jobs;
 }
 
+/** Decodes `GET /repos/{owner}/{repo}/actions/workflows`. */
+export function parseWorkflows(payload: unknown): WorkflowInfo[] {
+  const root = asRecord(payload);
+  const raw = root ? root['workflows'] : null;
+  if (!Array.isArray(raw)) return [];
+
+  const items: WorkflowInfo[] = [];
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    if (!record) continue;
+
+    const id = readNumber(record, 'id');
+    const name = readString(record, 'name');
+    if (id === null || name === null) continue;
+
+    items.push({
+      id,
+      name,
+      url: readString(record, 'html_url') ?? '',
+      state: readString(record, 'state') ?? 'unknown',
+    });
+  }
+  return items;
+}
+
 function readRateLimit(headers: Headers): RateLimitSnapshot | null {
   const limit = Number.parseInt(headers.get('x-ratelimit-limit') ?? '', 10);
   const remaining = Number.parseInt(headers.get('x-ratelimit-remaining') ?? '', 10);
@@ -231,6 +267,37 @@ function describeNetworkError(error: unknown): string {
   }
   if (error instanceof Error) return `Could not reach GitHub: ${error.message}`;
   return 'Could not reach GitHub.';
+}
+
+/** `retry-after` is seconds; GitHub sends it for the *secondary* limit. */
+function readRetryAfter(headers: Headers): number | null {
+  const raw = headers.get('retry-after');
+  if (raw === null) return null;
+  const seconds = Number.parseInt(raw, 10);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : null;
+}
+
+/**
+ * A primary limit exhausts `remaining`; a secondary one leaves it alone and
+ * only sends `retry-after`. Both must pause the loop, or the next poll walks
+ * straight back into the block.
+ */
+function isRateLimited(response: Response, rateLimit: RateLimitSnapshot | null): boolean {
+  if (response.status !== 403 && response.status !== 429) return false;
+  return rateLimit?.remaining === 0 || readRetryAfter(response.headers) !== null;
+}
+
+function limitError(headers: Headers, rateLimit: RateLimitSnapshot | null): GitHubApiError {
+  const retryAfter = readRetryAfter(headers);
+  const resetAt =
+    retryAfter !== null
+      ? new Date(Date.now() + retryAfter).toISOString()
+      : (rateLimit?.resetAt ?? new Date(Date.now() + 60_000).toISOString());
+  return new GitHubApiError(
+    `GitHub is limiting requests until ${resetAt}.`,
+    'rate-limit',
+    resetAt,
+  );
 }
 
 /** Signed storage URL: https only, and deliberately no `Authorization` header. */
@@ -276,7 +343,10 @@ async function readCappedText(response: Response, max: number): Promise<string> 
 export class ActionsClient {
   private readonly etags = new Map<string, string>();
   private readonly jobs = new Map<string, { fetchedAt: number; jobs: Job[] }>();
+  /** `ETag` per run, so re-reading unchanged jobs costs no rate-limit quota. */
+  private readonly jobEtags = new Map<string, string>();
   private readonly logs = new Map<string, { fetchedAt: number; text: string }>();
+  private readonly workflows = new Map<string, { fetchedAt: number; items: WorkflowInfo[] }>();
 
   async listRuns(repo: string, options: ListRunsOptions): Promise<ListRunsResult> {
     const url = `${API_ROOT}/repos/${repo}/actions/runs?per_page=${options.perPage}`;
@@ -302,8 +372,9 @@ export class ActionsClient {
 
   async listJobs(repo: string, runId: number, options: ListJobsOptions): Promise<Job[]> {
     const key = `${repo}#${runId}`;
+    const ttl = options.live === true ? JOBS_LIVE_CACHE_MS : JOBS_CACHE_MS;
     const cached = this.jobs.get(key);
-    if (cached !== undefined && Date.now() - cached.fetchedAt < JOBS_CACHE_MS) {
+    if (options.fresh !== true && cached !== undefined && Date.now() - cached.fetchedAt < ttl) {
       // Re-insert so the oldest entry is the least recently used one.
       this.jobs.delete(key);
       this.jobs.set(key, cached);
@@ -314,14 +385,28 @@ export class ActionsClient {
     const reply = await this.request({
       url,
       token: options.token,
-      signal: options.signal,
+      // Only replay a validator while its body is still held, or a 304 would
+      // leave nothing to return.
+      etag: cached === undefined ? undefined : this.jobEtags.get(key),
       notFoundMessage: `Run ${runId} was not found in ${repo}.`,
     });
+
+    // A 304 does not consume rate-limit quota: the jobs we hold are current.
+    if (reply.status === 304) {
+      if (cached === undefined) {
+        throw new GitHubApiError('GitHub returned an unexpected 304.', 'http');
+      }
+      this.jobs.delete(key);
+      this.jobs.set(key, { fetchedAt: Date.now(), jobs: cached.jobs });
+      return cached.jobs;
+    }
 
     const jobs = parseJobs(reply.body);
     this.evictJobs(Date.now());
     this.jobs.delete(key);
     this.jobs.set(key, { fetchedAt: Date.now(), jobs });
+    if (reply.etag === null) this.jobEtags.delete(key);
+    else this.jobEtags.set(key, reply.etag);
     return jobs;
   }
 
@@ -332,13 +417,19 @@ export class ActionsClient {
    */
   private evictJobs(now: number): void {
     for (const [cachedKey, entry] of this.jobs) {
-      if (now - entry.fetchedAt >= JOBS_CACHE_MS) this.jobs.delete(cachedKey);
+      if (now - entry.fetchedAt >= JOBS_CACHE_MS) this.forgetJob(cachedKey);
     }
     while (this.jobs.size >= JOBS_CACHE_ENTRIES) {
       const oldest = this.jobs.keys().next();
       if (oldest.done === true) return;
-      this.jobs.delete(oldest.value);
+      this.forgetJob(oldest.value);
     }
+  }
+
+  /** A validator is only useful next to the body it describes. */
+  private forgetJob(key: string): void {
+    this.jobs.delete(key);
+    this.jobEtags.delete(key);
   }
 
   /**
@@ -372,12 +463,15 @@ export class ActionsClient {
       throw new GitHubApiError(describeNetworkError(error), 'network');
     }
 
+    const rateLimit = readRateLimit(response.headers);
+
     if (response.status === 401) {
       throw new GitHubApiError('GitHub rejected the session. Sign in again.', 'auth');
     }
     if (response.status === 404) {
       throw new GitHubApiError('That job log is not available.', 'not-found');
     }
+    if (isRateLimited(response, rateLimit)) throw limitError(response.headers, rateLimit);
     if (response.status === 403 || response.status === 429) {
       throw new GitHubApiError('GitHub refused to hand out this log.', 'http');
     }
@@ -390,6 +484,56 @@ export class ActionsClient {
     this.logs.delete(key);
     this.logs.set(key, { fetchedAt: Date.now(), text });
     return text;
+  }
+
+  /**
+   * Every workflow file in the repository, so a workflow that has not run
+   * inside the current run page can still be named. Read on demand and cached
+   * for 15 minutes: it must never enter the poll.
+   */
+  async listWorkflows(
+    repo: string,
+    options: { token: string; fresh?: boolean },
+  ): Promise<WorkflowInfo[]> {
+    const cached = this.workflows.get(repo);
+    if (
+      options.fresh !== true &&
+      cached !== undefined &&
+      Date.now() - cached.fetchedAt < WORKFLOWS_CACHE_MS
+    ) {
+      return cached.items;
+    }
+
+    const url = `${API_ROOT}/repos/${repo}/actions/workflows?per_page=${MAX_PER_PAGE}`;
+    let items: WorkflowInfo[];
+    try {
+      const reply = await this.request({
+        url,
+        token: options.token,
+        notFoundMessage: `Workflows of ${repo} are not visible to this account.`,
+      });
+      items = parseWorkflows(reply.body);
+    } catch (error) {
+      // Remember the failure for the same window: a card that cannot read this
+      // must not ask again on every poll.
+      this.rememberWorkflows(repo, []);
+      throw error;
+    }
+
+    this.rememberWorkflows(repo, items);
+    return items;
+  }
+
+  private rememberWorkflows(repo: string, items: WorkflowInfo[]): void {
+    for (const [key, entry] of this.workflows) {
+      if (Date.now() - entry.fetchedAt >= WORKFLOWS_CACHE_MS) this.workflows.delete(key);
+    }
+    while (this.workflows.size >= WORKFLOWS_CACHE_ENTRIES) {
+      const oldest = this.workflows.keys().next();
+      if (oldest.done === true) break;
+      this.workflows.delete(oldest.value);
+    }
+    this.workflows.set(repo, { fetchedAt: Date.now(), items });
   }
 
   private evictLogs(now: number): void {
@@ -434,14 +578,7 @@ export class ActionsClient {
       throw new GitHubApiError(spec.notFoundMessage, 'not-found');
     }
     if (response.status === 403 || response.status === 429) {
-      if (rateLimit?.remaining === 0) {
-        const until = rateLimit.resetAt === null ? '' : ` until ${rateLimit.resetAt}`;
-        throw new GitHubApiError(
-          `GitHub API rate limit reached${until}.`,
-          'rate-limit',
-          rateLimit.resetAt,
-        );
-      }
+      if (isRateLimited(response, rateLimit)) throw limitError(response.headers, rateLimit);
       throw new GitHubApiError(`GitHub refused the request (HTTP ${response.status}).`, 'http');
     }
     if (!response.ok) {

@@ -60,9 +60,7 @@ export function makeView(): FakeView {
 /** What the extension did, so tests can assert side effects. */
 export const recorded = {
   opened: [] as string[],
-  info: '',
   error: '',
-  commands: [] as string[],
 };
 
 export const QuickPickItemKind = { Separator: -1, Default: 0 };
@@ -79,9 +77,6 @@ export const window = {
   state: { focused: true },
   onDidChangeWindowState: () => disposable(),
   registerWebviewViewProvider: () => disposable(),
-  showInformationMessage: async (message: string) => {
-    recorded.info = message;
-  },
   showErrorMessage: async (message: string) => {
     recorded.error = message;
   },
@@ -104,10 +99,7 @@ export const authentication = {
 };
 
 export const commands = {
-  registerCommand: (id: string) => {
-    recorded.commands.push(id);
-    return disposable();
-  },
+  registerCommand: () => disposable(),
   executeCommand: async () => undefined,
 };
 
