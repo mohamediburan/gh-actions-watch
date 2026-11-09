@@ -151,10 +151,26 @@ just another `select` in the test.
 - Formatting is whatever the repo standard is (2 spaces, single quotes, ~100
   columns, semicolons).
 
+## Publishing
+
+Releases are tag-driven and use Marketplace **Trusted Publishing** — no PAT and
+no repository secret:
+
+- the publisher has a Trusted Publishing policy for repository owner
+  `mohamediburan`, repository `gh-actions-watch`, workflow `release.yml`, no
+  environment;
+- push a tag that matches `package.json` `version` (`git tag v0.1.0 && git push
+  origin v0.1.0`) and `.github/workflows/release.yml` typechecks, tests and runs
+  `vsce publish --oidc`;
+- the job needs `id-token: write`; each OIDC token can be exchanged once and the
+  resulting credential expires after 15 minutes.
+
+Bump the version in `package.json` (or `npm version patch`) before tagging.
+
 ## Open items
 
 - Polling stops while the window is unfocused; a run that finishes while you are
   away shows as "in progress" until you return. Deliberate (zero background
   requests) — revisit only if asked.
 - `publisher` must match a Marketplace publisher the account owns before the
-  first `vsce publish`.
+  first release; the Trusted Publishing policy must name `release.yml`.

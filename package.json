@@ -111,6 +111,7 @@
     "lint": "oxlint src",
     "package": "vsce package",
     "publish": "vsce publish",
+    "publish:oidc": "vsce publish --oidc",
     "test": "esbuild test/view.test.ts --bundle --platform=node --format=cjs --alias:vscode=./test/vscode-stub.ts --outfile=dist/test.js --log-level=warning && node dist/test.js"
   },
   "devDependencies": {
