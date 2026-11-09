@@ -1,5 +1,6 @@
 # Everything below is development-only; the extension ships dist/ + media/.
 .vscode/**
+.github/**
 src/**
 test/**
 node_modules/**
