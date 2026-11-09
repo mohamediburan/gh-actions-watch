@@ -1,0 +1,281 @@
+:root {
+  --fg: var(--vscode-foreground);
+  --muted: var(--vscode-descriptionForeground);
+  --border: var(
+    --vscode-sideBarSectionHeader-border,
+    var(--vscode-panel-border, rgba(128, 128, 128, 0.3))
+  );
+  --hover: var(--vscode-list-hoverBackground);
+  --ok: var(--vscode-testing-iconPassed, #3fb950);
+  --fail: var(--vscode-testing-iconFailed, #f85149);
+  --warn: var(--vscode-editorWarning-foreground, #d29922);
+  --run: var(--vscode-charts-blue, #3794ff);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--fg);
+  background: transparent;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 12px);
+  line-height: 1.35;
+  user-select: none;
+}
+
+/* --- header: one 26px line, so a narrow sidebar still lists a lot --- */
+
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 4px 0 6px;
+  background: var(--vscode-sideBar-background, transparent);
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* The dot the status-bar item used to be: aggregate, always in view. */
+.head .dot {
+  flex: 0 0 auto;
+  font-size: 9px;
+}
+
+.busy {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.icon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.icon:hover {
+  background: var(--hover);
+}
+
+.sub {
+  padding: 2px 8px 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- rows: 22px tall, name truncates, meta never wraps --- */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 6px;
+}
+
+/* While jobs or a log are loading: dimmed, and deaf to clicks. */
+.list.is-loading {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 11px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* Section headers are a band, not another row: full-bleed tint, never
+   indented, so a child row's chevron cannot be mistaken for a section. */
+.row.section {
+  height: 20px;
+  margin-top: 4px;
+  border-radius: 0;
+  background: var(--vscode-sideBarSectionHeader-background, transparent);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.row.section .label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.row.section .meta {
+  font-size: 10px;
+}
+
+.chev {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+}
+
+/* A toggling row still carries its outcome, on the chevron instead of a dot. */
+.row[data-tone='success'] .chev {
+  color: var(--ok);
+}
+
+.row[data-tone='failure'] .chev {
+  color: var(--fail);
+}
+
+.row[data-tone='running'] .chev {
+  color: var(--run);
+}
+
+.row[data-tone='pending'] .chev {
+  color: var(--warn);
+}
+
+/* Expanded step log: plain text, wrapped, selectable. */
+.log-line {
+  padding: 1px 6px;
+  color: var(--muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  user-select: text;
+  white-space: pre-wrap;
+}
+
+.dot {
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
+}
+
+.dot[data-tone='success'] {
+  color: var(--ok);
+}
+
+.dot[data-tone='failure'] {
+  color: var(--fail);
+}
+
+.dot[data-tone='running'] {
+  color: var(--run);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.dot[data-tone='pending'] {
+  color: var(--warn);
+}
+
+.dot[data-tone='muted'] {
+  color: var(--muted);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* The one animation in the extension: drop it entirely when motion is reduced
+   (it is decoration, and a hidden view is discarded anyway). */
+@media (prefers-reduced-motion: reduce) {
+  .dot[data-tone='running'] {
+    animation: none;
+  }
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- states --- */
+
+.note {
+  margin: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.error {
+  margin: 4px 8px;
+  padding: 3px 6px;
+  border-left: 2px solid var(--fail);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.signin {
+  padding: 6px 8px;
+}
+
+.primary {
+  margin-top: 2px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 3px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.primary:hover {
+  background: var(--vscode-button-hoverBackground);
+}

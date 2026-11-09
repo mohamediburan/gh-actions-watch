@@ -1,0 +1,18 @@
+# Everything below is development-only; the extension ships dist/ + media/.
+.vscode/**
+src/**
+test/**
+node_modules/**
+
+# dev config and docs
+AGENTS.md
+tsconfig.json
+package-lock.json
+.vscodeignore
+.gitignore
+
+# build leftovers
+*.vsix
+*.tsbuildinfo
+**/*.map
+dist/test.js

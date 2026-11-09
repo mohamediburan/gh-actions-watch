@@ -1,0 +1,127 @@
+{
+  "name": "gh-actions-watch",
+  "displayName": "GitHub Actions Watch",
+  "description": "Compact GitHub Actions sidebar card: all runs, runs grouped by workflow, and the failed step on demand.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "mohamediburan",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "github",
+    "actions",
+    "workflow",
+    "ci",
+    "pipeline",
+    "build"
+  ],
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mohamediburan/gh-actions-watch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mohamediburan/gh-actions-watch/issues"
+  },
+  "homepage": "https://github.com/mohamediburan/gh-actions-watch#readme",
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ghActionsWatch.show",
+        "title": "Show Actions",
+        "category": "GitHub Actions Watch"
+      },
+      {
+        "command": "ghActionsWatch.refresh",
+        "title": "Refresh",
+        "category": "GitHub Actions Watch"
+      },
+      {
+        "command": "ghActionsWatch.signIn",
+        "title": "Sign in to GitHub",
+        "category": "GitHub Actions Watch"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ghActionsWatch",
+          "title": "Actions",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ghActionsWatch": [
+        {
+          "type": "webview",
+          "id": "ghActionsWatch.runs",
+          "name": "Actions",
+          "contextualTitle": "GitHub Actions Watch",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitHub Actions Watch",
+      "properties": {
+        "ghActionsWatch.repositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Repositories to watch, as `owner/name`. Leave empty to use the `origin` remote of each open workspace folder."
+        },
+        "ghActionsWatch.activePollMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 5000,
+          "description": "Poll interval while a run is queued or in progress."
+        },
+        "ghActionsWatch.idlePollMs": {
+          "type": "number",
+          "default": 90000,
+          "minimum": 15000,
+          "description": "Poll interval when nothing is running."
+        },
+        "ghActionsWatch.recentRuns": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "How many recent runs to fetch per repository. The page is shared by every workflow, so a higher number surfaces more workflow groups."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run bundle",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --format=cjs --external:vscode --sourcemap --outfile=dist/extension.js",
+    "watch": "npm run bundle -- --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src",
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "test": "esbuild test/view.test.ts --bundle --platform=node --format=cjs --alias:vscode=./test/vscode-stub.ts --outfile=dist/test.js --log-level=warning && node dist/test.js"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.2",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.28.1",
+    "oxlint": "1.70.0",
+    "typescript": "6.0.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

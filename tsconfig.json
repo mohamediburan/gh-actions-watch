@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    // `node16` (not `node10`) because TypeScript 6 rejects the old name. The
+    // package has no `"type": "module"`, so these files are CommonJS and
+    // extensionless relative imports are still correct.
+    "module": "node16",
+    "moduleResolution": "node16",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
