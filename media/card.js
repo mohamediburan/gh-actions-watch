@@ -42,15 +42,26 @@
     node.dataset.tone = row.tone;
     node.title = row.tip || row.title;
     node.style.paddingLeft = 6 + row.depth * 12 + 'px';
-    if (row.expanded !== undefined) node.setAttribute('aria-expanded', String(row.expanded));
+    if (row.expanded !== undefined) {
+      node.setAttribute('aria-expanded', String(row.expanded));
+      node.dataset.expanded = String(row.expanded);
+    }
 
-    if (row.kind === 'section' || row.kind === 'group') {
-      node.append(el('span', 'chev', row.expanded ? '\u25BE' : '\u25B8'));
+    // Two fixed cells keep every label aligned: the disclosure chevron and
+    // the row's own outcome. A group used to show only the chevron, so a
+    // running job and a failed one were distinguished by a 9px tint alone.
+    const lead = el('span', 'lead');
+    const toggles = row.kind === 'section' || row.kind === 'group';
+    const chevron = toggles ? (row.expanded ? '\u25BE' : '\u25B8') : '';
+    lead.append(el('span', toggles ? 'chev' : 'chev blank', chevron));
+    if (row.kind === 'section') {
+      lead.append(el('span', 'dot blank', ''));
     } else {
       const dot = el('span', 'dot', GLYPH[row.tone] || GLYPH.muted);
       dot.dataset.tone = row.tone;
-      node.append(dot);
+      lead.append(dot);
     }
+    node.append(lead);
 
     node.append(el('span', 'label', row.title));
     if (row.meta) node.append(el('span', 'meta', row.meta));
@@ -88,6 +99,14 @@
     app.setAttribute('aria-busy', String(view.busy));
 
     if (view.error) app.append(el('p', 'error', view.error));
+
+    // Quota is part of the card, not a hidden tooltip: a poll that is paused
+    // must be explainable without hovering a 9px dot.
+    if (view.rateLimit) {
+      const quota = el('p', 'quota', view.rateLimit);
+      quota.title = 'GitHub REST API quota for the current hour';
+      app.append(quota);
+    }
 
     // The session check is silent and usually instant, but until it answers we
     // must not show a sign-in button that would then vanish.

@@ -53,12 +53,20 @@ const RUN_CONCLUSIONS: readonly Exclude<WorkflowRunConclusion, null>[] = [
 export class GitHubApiError extends Error {
   readonly kind: RepoErrorKind;
   readonly resetAt: string | null;
+  /** Quota from the failing response, so a limit is visible in the card. */
+  readonly rateLimit: RateLimitSnapshot | null;
 
-  constructor(message: string, kind: RepoErrorKind, resetAt: string | null = null) {
+  constructor(
+    message: string,
+    kind: RepoErrorKind,
+    resetAt: string | null = null,
+    rateLimit: RateLimitSnapshot | null = null,
+  ) {
     super(message);
     this.name = 'GitHubApiError';
     this.kind = kind;
     this.resetAt = resetAt;
+    this.rateLimit = rateLimit;
   }
 }
 
@@ -297,6 +305,7 @@ function limitError(headers: Headers, rateLimit: RateLimitSnapshot | null): GitH
     `GitHub is limiting requests until ${resetAt}.`,
     'rate-limit',
     resetAt,
+    rateLimit,
   );
 }
 
@@ -342,7 +351,7 @@ async function readCappedText(response: Response, max: number): Promise<string> 
  */
 export class ActionsClient {
   private readonly etags = new Map<string, string>();
-  private readonly jobs = new Map<string, { fetchedAt: number; jobs: Job[] }>();
+  private readonly jobs = new Map<string, { fetchedAt: number; jobs: Job[]; live: boolean }>();
   /** `ETag` per run, so re-reading unchanged jobs costs no rate-limit quota. */
   private readonly jobEtags = new Map<string, string>();
   private readonly logs = new Map<string, { fetchedAt: number; text: string }>();
@@ -372,9 +381,19 @@ export class ActionsClient {
 
   async listJobs(repo: string, runId: number, options: ListJobsOptions): Promise<Job[]> {
     const key = `${repo}#${runId}`;
-    const ttl = options.live === true ? JOBS_LIVE_CACHE_MS : JOBS_CACHE_MS;
     const cached = this.jobs.get(key);
-    if (options.fresh !== true && cached !== undefined && Date.now() - cached.fetchedAt < ttl) {
+    // A body fetched while the run was live is stale the moment the run is
+    // reported finished, so it must be re-read rather than riding the 60s
+    // finished-run window. While still live it keeps the short TTL.
+    const liveToFinished = cached?.live === true && options.live !== true;
+    const ttl =
+      options.live === true || cached?.live === true ? JOBS_LIVE_CACHE_MS : JOBS_CACHE_MS;
+    if (
+      options.fresh !== true &&
+      cached !== undefined &&
+      !liveToFinished &&
+      Date.now() - cached.fetchedAt < ttl
+    ) {
       // Re-insert so the oldest entry is the least recently used one.
       this.jobs.delete(key);
       this.jobs.set(key, cached);
@@ -397,14 +416,14 @@ export class ActionsClient {
         throw new GitHubApiError('GitHub returned an unexpected 304.', 'http');
       }
       this.jobs.delete(key);
-      this.jobs.set(key, { fetchedAt: Date.now(), jobs: cached.jobs });
+      this.jobs.set(key, { fetchedAt: Date.now(), jobs: cached.jobs, live: cached.live });
       return cached.jobs;
     }
 
     const jobs = parseJobs(reply.body);
     this.evictJobs(Date.now());
     this.jobs.delete(key);
-    this.jobs.set(key, { fetchedAt: Date.now(), jobs });
+    this.jobs.set(key, { fetchedAt: Date.now(), jobs, live: options.live === true });
     if (reply.etag === null) this.jobEtags.delete(key);
     else this.jobEtags.set(key, reply.etag);
     return jobs;
@@ -417,7 +436,8 @@ export class ActionsClient {
    */
   private evictJobs(now: number): void {
     for (const [cachedKey, entry] of this.jobs) {
-      if (now - entry.fetchedAt >= JOBS_CACHE_MS) this.forgetJob(cachedKey);
+      const ttl = entry.live ? JOBS_LIVE_CACHE_MS : JOBS_CACHE_MS;
+      if (now - entry.fetchedAt >= ttl) this.forgetJob(cachedKey);
     }
     while (this.jobs.size >= JOBS_CACHE_ENTRIES) {
       const oldest = this.jobs.keys().next();

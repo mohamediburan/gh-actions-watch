@@ -169,7 +169,7 @@ export interface CardView {
   subtitle: string;
   /** Aggregate repository state, painted as a dot beside the title. */
   status: CardTone;
-  /** Hover text for that dot: the latest run per repository and API quota. */
+  /** Hover text for that dot: the latest run per repository. */
   statusTip: string;
   signedIn: boolean;
   /** The silent session check has not answered yet: do not offer sign-in. */
@@ -179,6 +179,8 @@ export interface CardView {
   busyKey: string | null;
   /** One muted line under the list, e.g. why the page is capped. */
   footer: string;
+  /** Visible REST quota line, formatted in the host so the painter stays dumb. */
+  rateLimit: string;
   /** Navigation help when there is nothing to poll. */
   hint: string | null;
   /** Transport/repository failure, shown as one compact line. */

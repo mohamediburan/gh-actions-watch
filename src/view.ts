@@ -7,11 +7,13 @@ import {
   groupByWorkflow,
   idleWorkflowRow,
   isRelevantJob,
+  rateLimitLabel,
   relative,
   repoRow,
   runRows,
   sectionRow,
   statusSummary,
+  toneFor,
   stepKey,
   stepLogLines,
   updatedLabel,
@@ -34,7 +36,16 @@ type Level = { kind: 'workflows' } | { kind: 'run'; repo: string; runId: number 
 /** The header fields every level shares. */
 type CardBase = Pick<
   CardView,
-  'signedIn' | 'authPending' | 'status' | 'statusTip' | 'busy' | 'busyKey' | 'footer' | 'hint' | 'error'
+  | 'signedIn'
+  | 'authPending'
+  | 'status'
+  | 'statusTip'
+  | 'busy'
+  | 'busyKey'
+  | 'footer'
+  | 'rateLimit'
+  | 'hint'
+  | 'error'
 >;
 
 /** An excerpt of a running run goes stale as fast as its steps do. */
@@ -101,6 +112,8 @@ export class ActionsView implements vscode.WebviewViewProvider, vscode.Disposabl
   /** Serialised last payload, so an unchanged model does not rebuild the DOM. */
   private lastSent = '';
   private pushing = false;
+  /** A poll landed while a build was in flight: rebuild once it finishes. */
+  private pushAgain = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -333,14 +346,23 @@ export class ActionsView implements vscode.WebviewViewProvider, vscode.Disposabl
   }
 
   private async push(): Promise<void> {
-    if (this.view === undefined || !this.view.visible || this.pushing) return;
+    if (this.view === undefined || !this.view.visible) return;
+    // A drill-down awaits jobs; a poll can land in that window. Coalesce it
+    // into one more build instead of dropping the newer snapshot on the floor.
+    if (this.pushing) {
+      this.pushAgain = true;
+      return;
+    }
 
     this.pushing = true;
     try {
-      const view = await this.buildView();
-      this.last = view;
-      this.rows = view.rows;
-      this.post(view);
+      do {
+        this.pushAgain = false;
+        const view = await this.buildView();
+        this.last = view;
+        this.rows = view.rows;
+        this.post(view);
+      } while (this.pushAgain && this.view !== undefined && this.view.visible);
     } finally {
       this.pushing = false;
     }
@@ -389,6 +411,7 @@ export class ActionsView implements vscode.WebviewViewProvider, vscode.Disposabl
       busy: false,
       busyKey: null,
       footer: updatedLabel(fetchedAt === 0 ? null : fetchedAt),
+      rateLimit: rateLimitLabel(snapshot.rateLimit),
       hint: snapshot.hint,
       error: this.notice ?? repoError?.message ?? null,
     };
@@ -538,6 +561,8 @@ export class ActionsView implements vscode.WebviewViewProvider, vscode.Disposabl
     if (jobs === null) {
       return {
         ...base,
+        status: toneFor(run.status, run.conclusion),
+        statusTip: `${run.name} #${run.runNumber} · ${describe(run)} · ${repo}`,
         level: 'run',
         title: run.name,
         subtitle: `#${run.runNumber}`,
@@ -555,6 +580,10 @@ export class ActionsView implements vscode.WebviewViewProvider, vscode.Disposabl
 
     return {
       ...base,
+      // The header dot follows the run being read, not the repository's newest
+      // run: otherwise an older failed run paints an ✕ over a live drill-down.
+      status: toneFor(run.status, run.conclusion),
+      statusTip: `${run.name} #${run.runNumber} · ${describe(run)} · ${repo} · ${run.branch} · ${run.shortSha}`,
       level: 'run',
       title: run.name,
       subtitle: `#${run.runNumber} · ${describe(run)} · ${relative(run.startedAt ?? run.createdAt)}`,

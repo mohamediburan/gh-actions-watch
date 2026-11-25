@@ -24,6 +24,24 @@ function check(name: string, actual: unknown, expected: unknown): void {
 const now = Date.now();
 const iso = (minutesAgo: number): string => new Date(now - minutesAgo * 60_000).toISOString();
 
+/** A minimal run row for the focused scenarios at the end of the suite. */
+const makeRun = (id: number, overrides: Record<string, unknown> = {}) => ({
+  id,
+  run_number: 1,
+  workflow_id: 7,
+  name: 'CI',
+  html_url: `https://github.com/o/r/actions/runs/${id}`,
+  head_branch: 'dev',
+  head_sha: 'aaaaaaaaaaaa',
+  event: 'push',
+  status: 'completed',
+  conclusion: 'success',
+  created_at: iso(1),
+  run_started_at: iso(1),
+  run_attempt: 1,
+  ...overrides,
+});
+
 const RUNS = {
   workflow_runs: [
     {
@@ -214,7 +232,11 @@ const row = (fake: FakeView, title: string) =>
   last(fake).rows.find((item) => item.title === title);
 
 async function main(): Promise<void> {
-  let runsPayload = RUNS;
+  let runsPayload: unknown = RUNS;
+  let jobsPayload: unknown = JOBS;
+  let jobsEtag = 'W/"jobs-1"';
+  let jobsGate: Promise<void> | undefined;
+  let runsGate: Promise<void> | undefined;
   let workflowsFail = false;
   let runsLimited = false;
   let lastJobsValidator: string | undefined;
@@ -232,12 +254,14 @@ async function main(): Promise<void> {
         : reply(WORKFLOWS);
     }
     if (url.includes('/jobs')) {
+      if (jobsGate !== undefined) await jobsGate;
       // Conditional read: a replayed validator means nothing changed.
       lastJobsValidator = init?.headers?.['if-none-match'];
-      if (lastJobsValidator === 'W/"jobs-1"') return notModified();
-      return reply(JOBS, { etag: 'W/"jobs-1"' });
+      if (lastJobsValidator === jobsEtag) return notModified();
+      return reply(jobsPayload, { etag: jobsEtag });
     }
     if (runsLimited) return secondaryLimit();
+    if (runsGate !== undefined) await runsGate;
     return reply(runsPayload, { etag: 'W/"runs-1"' });
   }) as typeof fetch;
 
@@ -267,6 +291,7 @@ async function main(): Promise<void> {
   check('list screen level', last(fake).level, 'workflows');
   check('header status reflects a failure', last(fake).status, 'failure');
   check('header status tip names the repository', /o\/r/.test(last(fake).statusTip), true);
+  check('the quota is visible in the card', /API 4998\/5000 remaining/.test(last(fake).rateLimit), true);
   check('list screen rows', labels(fake), [
     'All runs',
     'CI #41',
@@ -367,6 +392,8 @@ async function main(): Promise<void> {
   check('a collapsed job hides its steps', labels(fake).includes('Run tests'), false);
   check('step is indented under its job', row(fake, 'Build images')?.depth, 1);
   check('failed step keeps its tone', row(fake, 'Build images')?.tone, 'failure');
+  check('failed job keeps its own tone', row(fake, 'build (ubuntu-latest)')?.tone, 'failure');
+  check('running job keeps its own tone', row(fake, 'e2e')?.tone, 'running');
   check(
     'step meta names the step number',
     /^step 7( · |$)/.test(String(row(fake, 'Build images')?.meta)),
@@ -569,6 +596,11 @@ async function main(): Promise<void> {
   const limitFailure = limitPoller.snapshot().repos[0]?.error;
   check('a secondary limit is classified as rate limiting', limitFailure?.kind, 'rate-limit');
   check(
+    'the quota shown after a limit is the one GitHub sent',
+    limitPoller.snapshot().rateLimit?.remaining,
+    4990,
+  );
+  check(
     'and pauses for the retry-after window',
     /limiting requests until/.test(String(limitFailure?.message)),
     true,
@@ -583,6 +615,165 @@ async function main(): Promise<void> {
   again.posted.length = 0;
   await send(again, { type: 'ready' });
   check('a reloaded renderer is repainted on ready', again.posted.length > 0, true);
+
+  // The detail header must describe the run being read, not the repository's
+  // newest run: an older failure must not paint an ✕ over a live drill-down.
+  runsLimited = false;
+  runsPayload = {
+    workflow_runs: [
+      makeRun(201, { run_number: 9, created_at: iso(1), run_started_at: iso(1) }),
+      makeRun(203, {
+        run_number: 8,
+        conclusion: 'failure',
+        created_at: iso(2),
+        run_started_at: iso(2),
+      }),
+      makeRun(202, {
+        run_number: 10,
+        status: 'in_progress',
+        conclusion: null,
+        created_at: iso(3),
+        run_started_at: iso(3),
+      }),
+    ],
+  };
+  const detailPoller = new ActionsPoller({
+    repositories: ['o/detail'],
+    activePollMs: 15_000,
+    idlePollMs: 90_000,
+    recentRuns: 25,
+  });
+  await detailPoller.start();
+  const detailView = new ActionsView(Uri.joinPath({}, 'tmp'), detailPoller);
+  const detailFake = makeView();
+  detailView.resolveWebviewView(detailFake as never, {} as never, {} as never);
+  await tick();
+  check('aggregate header follows the newest run', last(detailFake).status, 'success');
+  await send(detailFake, { type: 'select', id: 'run:o/detail:202' });
+  check('detail header follows the opened run', last(detailFake).status, 'running');
+  check('detail tip names the opened run', /CI #10/.test(last(detailFake).statusTip), true);
+  detailView.dispose();
+  detailPoller.dispose();
+
+  // A body fetched while a run was live must keep the short TTL after the run
+  // completes, or its stale statuses ride the 60s finished-run window.
+  jobsPayload = {
+    jobs: [
+      {
+        id: 910,
+        name: 'live',
+        html_url: 'https://github.com/o/live/actions/runs/301/job/910',
+        status: 'in_progress',
+        conclusion: null,
+        started_at: iso(1),
+        completed_at: null,
+        steps: [],
+      },
+    ],
+  };
+  jobsEtag = 'W/"jobs-live-1"';
+  runsPayload = {
+    workflow_runs: [makeRun(301, { status: 'in_progress', conclusion: null })],
+  };
+  const livePoller = new ActionsPoller({
+    repositories: ['o/live'],
+    activePollMs: 15_000,
+    idlePollMs: 90_000,
+    recentRuns: 25,
+  });
+  await livePoller.start();
+  const liveRun = livePoller.snapshot().repos[0]?.runs[0];
+  if (liveRun === undefined) throw new Error('the live run was not decoded');
+  const firstJobs = await livePoller.loadJobs('o/live', liveRun);
+  check('live jobs are read', firstJobs?.[0]?.status, 'in_progress');
+  const liveJob = (jobsPayload as { jobs: Record<string, unknown>[] }).jobs[0];
+  jobsPayload = {
+    jobs: [
+      {
+        ...liveJob,
+        status: 'completed',
+        conclusion: 'failure',
+        completed_at: iso(0),
+      },
+    ],
+  };
+  jobsEtag = 'W/"jobs-live-2"';
+  const secondJobs = await livePoller.loadJobs('o/live', {
+    ...liveRun,
+    status: 'completed',
+    conclusion: 'failure',
+  });
+  check('a live cache entry is not reused after completion', secondJobs?.[0]?.conclusion, 'failure');
+  check(
+    'the transition re-reads jobs',
+    asked.filter((url) => url.includes('/runs/301/jobs')).length,
+    2,
+  );
+  livePoller.dispose();
+
+  // An explicit refresh that lands mid-poll must run afterwards, not vanish.
+  const queueStart = asked.filter((url) => url.includes('/repos/o/queue/actions/runs')).length;
+  let releaseRuns: (() => void) | undefined;
+  runsGate = new Promise<void>((resolve) => {
+    releaseRuns = resolve;
+  });
+  const queuePoller = new ActionsPoller({
+    repositories: ['o/queue'],
+    activePollMs: 15_000,
+    idlePollMs: 90_000,
+    recentRuns: 25,
+  });
+  await queuePoller.reloadRepositories();
+  const firstRefresh = queuePoller.refresh({ force: true });
+  const secondRefresh = queuePoller.refresh({ force: true });
+  await tick();
+  check(
+    'a refresh in flight does not start a second request',
+    asked.filter((url) => url.includes('/repos/o/queue/actions/runs')).length - queueStart,
+    1,
+  );
+  releaseRuns?.();
+  await Promise.all([firstRefresh, secondRefresh]);
+  check(
+    'a queued refresh still runs',
+    asked.filter((url) => url.includes('/repos/o/queue/actions/runs')).length - queueStart,
+    2,
+  );
+  runsGate = undefined;
+  queuePoller.dispose();
+
+  // A poll that lands while jobs are loading must not be dropped by the push
+  // guard; the card rebuilds once with the newer snapshot.
+  let releaseJobs: (() => void) | undefined;
+  jobsGate = new Promise<void>((resolve) => {
+    releaseJobs = resolve;
+  });
+  const coalesceRun = makeRun(401, { conclusion: 'failure' });
+  runsPayload = { workflow_runs: [coalesceRun] };
+  const coalescePoller = new ActionsPoller({
+    repositories: ['o/coalesce'],
+    activePollMs: 15_000,
+    idlePollMs: 90_000,
+    recentRuns: 25,
+  });
+  await coalescePoller.start();
+  const coalesceView = new ActionsView(Uri.joinPath({}, 'tmp'), coalescePoller);
+  const coalesceFake = makeView();
+  coalesceView.resolveWebviewView(coalesceFake as never, {} as never, {} as never);
+  await tick();
+  const drill = send(coalesceFake, { type: 'select', id: 'run:o/coalesce:401' });
+  await tick();
+  runsPayload = {
+    workflow_runs: [{ ...coalesceRun, status: 'in_progress', conclusion: null }],
+  };
+  await coalescePoller.refresh({ force: true });
+  jobsGate = undefined;
+  releaseJobs?.();
+  await drill;
+  await tick();
+  check('a poll during a drill-down is not lost', /in progress/.test(last(coalesceFake).subtitle), true);
+  coalesceView.dispose();
+  coalescePoller.dispose();
 
   poller.dispose();
   view.dispose();

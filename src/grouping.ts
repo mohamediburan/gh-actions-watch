@@ -3,6 +3,7 @@ import type {
   CardSection,
   CardTone,
   Job,
+  RateLimitSnapshot,
   RepoState,
   ViewState,
   WorkflowInfo,
@@ -135,10 +136,6 @@ export function statusSummary(state: ViewState): StatusSummary {
     }
   }
 
-  if (state.rateLimit !== null) {
-    lines.push(`API ${state.rateLimit.remaining}/${state.rateLimit.limit} requests remaining`);
-  }
-
   const tone: CardTone = errored
     ? 'pending'
     : failing
@@ -174,6 +171,13 @@ export function updatedLabel(fetchedAt: number | null): string {
   const seconds = Math.max(0, Math.round((Date.now() - fetchedAt) / 1000));
   if (seconds < 45) return 'Updated just now';
   return `Updated ${relative(new Date(fetchedAt).toISOString())} ago`;
+}
+
+/** The quota line under the card. UTC keeps it stable across locales. */
+export function rateLimitLabel(limit: RateLimitSnapshot | null): string {
+  if (limit === null) return '';
+  const reset = limit.resetAt === null ? '' : ` · resets ${limit.resetAt.slice(11, 16)} UTC`;
+  return `API ${limit.remaining}/${limit.limit} remaining${reset}`;
 }
 
 export function duration(start: string | null, end: string | null): string {

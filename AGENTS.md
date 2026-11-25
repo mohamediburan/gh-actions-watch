@@ -98,13 +98,16 @@ Corollaries:
 - `CardRow.depth` is the only layout hint: 0 = a section header or top-level
   row, 1 = a row under a section (and a failed step under its job), 2 = a run
   under a workflow.
+- On the run level the header dot describes **that run**, not the repository's
+  newest run. The aggregate dot is for the list; carrying it into a drill-down
+  is what paints an ✕ over a job that is still running.
 
 ## Cost rules
 
 - `ETag` per repository, replayed as `If-None-Match`; **a 304 does not consume
   rate-limit quota**, so an idle poll is effectively free. Jobs use the same
   trick, so re-reading an unchanged run is free too.
-- 15 s cadence while any run is queued/in progress, 90 s otherwise.
+- 10 s cadence while any run is queued/in progress, 90 s otherwise.
 - No request while the window is unfocused unless `refresh({ force: true })`.
 - On 403/429 with `x-ratelimit-remaining: 0`, back off to `x-ratelimit-reset`,
   clamped to 30 s…15 min.
@@ -117,6 +120,17 @@ Corollaries:
   spends nothing because the refresh is not forced.
 - An unchanged model is never posted: `post()` compares the serialised payload,
   so a poll that returns the same rows costs the renderer nothing.
+- A jobs body fetched while a run was live keeps the 10 s TTL even after the
+  run completes. Reusing the 60 s finished-run window for it would leave stale
+  statuses on screen for a minute.
+- Refreshes are serialised, not dropped: an explicit refresh that lands during
+  a poll runs immediately afterwards. Likewise, a poll that lands while a
+  drill-down is loading is coalesced into one more `push()` instead of being
+  discarded by the in-flight guard.
+- The quota snapshot is painted as a small line under the card, not left in a
+  tooltip. It is formatted in the host (`rateLimitLabel`) so the painter stays
+  dumb, and a 403/429 response updates it too instead of leaving the last
+  healthy count on screen.
 
 ## Auth
 
@@ -146,8 +160,9 @@ It bundles `test/view.test.ts` with `--alias:vscode=./test/vscode-stub.ts` and
 stubs `globalThis.fetch`, so the whole card runs headlessly: no VS Code, no
 network. It covers grouping, run order, all-jobs/all-steps rendering, job and
 step-log expansion, the `job.html_url#step:<n>:1` anchor, section and group
-expansion, back navigation, the jobs and logs caches, hidden-view suppression
-and the signed-out state.
+expansion, back navigation, the jobs and logs caches, hidden-view suppression,
+the signed-out state, the visible quota line, the run-level header, the live
+jobs cache transition, queued refreshes and a poll landing mid-drill-down.
 
 When you change the model, extend this test rather than eyeballing the UI — the
 stub's `makeView()` records every `postMessage`, so a new level or toggle is

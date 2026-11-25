@@ -7,7 +7,7 @@ function readOptions(): PollerOptions {
   const config = vscode.workspace.getConfiguration('ghActionsWatch');
   return {
     repositories: config.get<string[]>('repositories', []),
-    activePollMs: config.get<number>('activePollMs', 15_000),
+    activePollMs: config.get<number>('activePollMs', 10_000),
     idlePollMs: config.get<number>('idlePollMs', 90_000),
     recentRuns: config.get<number>('recentRuns', 25),
   };

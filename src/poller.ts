@@ -62,7 +62,8 @@ export class ActionsPoller implements vscode.Disposable {
   private hint: string | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private controller: AbortController | undefined;
-  private refreshing = false;
+  /** Serialises refreshes so an explicit one is never dropped mid-poll. */
+  private refreshTail: Promise<void> = Promise.resolve();
   private focused = true;
   private disposed = false;
 
@@ -135,8 +136,18 @@ export class ActionsPoller implements vscode.Disposable {
     else await this.refresh({ token });
   }
 
+  /**
+   * Callers await this, so a refresh that arrives mid-poll must run afterwards
+   * rather than being dropped. The tail keeps one network loop and one timer.
+   */
   async refresh(options: RefreshOptions = {}): Promise<void> {
-    if (this.disposed || this.refreshing) return;
+    const run = this.refreshTail.then(() => this.runRefresh(options));
+    this.refreshTail = run.catch(() => {});
+    return run;
+  }
+
+  private async runRefresh(options: RefreshOptions): Promise<void> {
+    if (this.disposed) return;
 
     // Nothing is looking at this. Re-arm on the slow cadence instead of
     // spending requests; focus or an explicit command refreshes immediately.
@@ -152,7 +163,6 @@ export class ActionsPoller implements vscode.Disposable {
       return;
     }
 
-    this.refreshing = true;
     this.controller?.abort();
     const controller = new AbortController();
     this.controller = controller;
@@ -168,7 +178,7 @@ export class ActionsPoller implements vscode.Disposable {
         await this.pollRepo(repo, token, controller.signal);
       }
     } finally {
-      this.refreshing = false;
+      if (this.controller === controller) this.controller = undefined;
       this.publish();
       this.schedule();
     }
@@ -272,7 +282,7 @@ export class ActionsPoller implements vscode.Disposable {
         runs: result.notModified && previous !== undefined ? previous.runs : result.runs,
         fetchedAt: Date.now(),
         error: null,
-        rateLimit: result.rateLimit,
+        rateLimit: result.rateLimit ?? previous?.rateLimit ?? null,
       });
     } catch (error) {
       if (signal.aborted || this.disposed) return;
@@ -287,7 +297,7 @@ export class ActionsPoller implements vscode.Disposable {
         runs: previous?.runs ?? [],
         fetchedAt: previous?.fetchedAt ?? null,
         error: { kind: failure.kind, message: failure.message, resetAt: failure.resetAt },
-        rateLimit: previous?.rateLimit ?? null,
+        rateLimit: failure.rateLimit ?? previous?.rateLimit ?? null,
       });
     }
   }
